@@ -39,7 +39,7 @@ data_transforms = transforms.Compose([
 
 # Dataset directories
 fire_dir = r"C:\Users\Admin\Desktop\Fire Detection From a Video\Datasets\fire"
-nofire_dir = r"C:\Users\Admin\Desktop\Fire Detection From a Video\Datasets\nofire"
+nofire_dir = r"C:\Users\Admin\Desktop\Fire Detection From a Video\Datasets\no_fire"
 
 # Create dataset
 dataset = CustomImageDataset(fire_dir=fire_dir, nofire_dir=nofire_dir, transform=data_transforms)
