@@ -9,395 +9,476 @@ import tkinter as tk
 from tkinter import messagebox
 import time
 from datetime import datetime, timedelta
+import logging
+import threading
+import queue
+import json
+from pathlib import Path
 
-data_transforms = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-])
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('fire_detection.log'),
+        logging.StreamHandler()
+    ]
+)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = models.resnet18(weights="IMAGENET1K_V1")
-num_features = model.fc.in_features
-model.fc = nn.Linear(num_features, 2)
-model.load_state_dict(torch.load("best_fire_detection_model.pth"))
-model = model.to(device)
-model.eval()
-
-def send_alert(title, message):
-    try:
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        messagebox.showinfo(title, message)
-        root.destroy()
-        print("Pop-up alert displayed!")
-    except Exception as e:
-        print(f"Error displaying pop-up alert: {e}")
-
-def enhance_frame(frame):
-    # Convert to LAB color space for better color separation
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    
-    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-    cl = clahe.apply(l)
-    
-    # Merge the CLAHE enhanced L-channel back with A and B channels
-    enhanced_lab = cv2.merge((cl,a,b))
-    
-    # Convert back to BGR color space
-    enhanced_bgr = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
-    
-    return enhanced_bgr
-
-def is_fire_colored(frame):
-    # Enhance the frame first
-    enhanced_frame = enhance_frame(frame)
-    
-    # Convert to HSV color space
-    hsv = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2HSV)
-    
-    # More permissive color ranges for fire detection
-    # Red-Orange range
-    lower_red1 = np.array([0, 70, 70])
-    upper_red1 = np.array([15, 255, 255])
-    # Upper red range
-    lower_red2 = np.array([165, 70, 70])
-    upper_red2 = np.array([180, 255, 255])
-    # Yellow range for bright flames
-    lower_yellow = np.array([15, 70, 70])
-    upper_yellow = np.array([35, 255, 255])
-    
-    # Create masks for each color range
-    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-    mask3 = cv2.inRange(hsv, lower_yellow, upper_yellow)
-    
-    # Combine masks
-    mask = cv2.bitwise_or(cv2.bitwise_or(mask1, mask2), mask3)
-    
-    # Apply morphological operations to reduce noise
-    kernel = np.ones((3,3), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    
-    # Find contours to analyze blob size
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Filter small contours
-    min_contour_area = frame.shape[0] * frame.shape[1] * 0.001
-    valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_contour_area]
-    
-    # If no valid contours found, return False
-    if not valid_contours:
-        return False, mask
-    
-    # Calculate the ratio of fire-colored pixels
-    fire_pixel_ratio = np.sum(mask > 0) / (mask.shape[0] * mask.shape[1])
-    
-    # More permissive threshold for fire pixel ratio
-    return fire_pixel_ratio > 0.005, mask
-
-def analyze_temporal_patterns(frame_buffer):
-    if len(frame_buffer) < 2:
-        return False, 0
-    
-    # Convert frames to grayscale
-    gray_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frame_buffer]
-    
-    # Calculate frame differences
-    diffs = []
-    for i in range(len(gray_frames)-1):
-        diff = cv2.absdiff(gray_frames[i], gray_frames[i+1])
-        diffs.append(np.mean(diff))
-    
-    # Analyze the pattern of changes
-    mean_diff = np.mean(diffs)
-    std_diff = np.std(diffs)
-    
-    # Real fire typically shows fluctuating patterns
-    is_fluctuating = std_diff > 2.0 and mean_diff > 1.0
-    
-    return is_fluctuating, mean_diff
-
-def detect_motion(prev_frame, curr_frame):
-    if prev_frame is None:
-        return False, None, 0, None
-    
-    # Convert frames to grayscale
-    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-    curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
-    
-    # Apply Gaussian blur to reduce noise
-    prev_gray = cv2.GaussianBlur(prev_gray, (15, 15), 0)
-    curr_gray = cv2.GaussianBlur(curr_gray, (15, 15), 0)
-    
-    # Calculate frame difference
-    frame_diff = cv2.absdiff(prev_gray, curr_gray)
-    
-    # Calculate optical flow
-    flow = cv2.calcOpticalFlowFarneback(prev_gray, curr_gray, None, 
-                                      pyr_scale=0.5, levels=3, winsize=15, 
-                                      iterations=3, poly_n=5, poly_sigma=1.2, flags=0)
-    
-    # Calculate flow magnitude and angle
-    magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-    
-    # Analyze flow patterns
-    mean_magnitude = np.mean(magnitude)
-    flow_mask = magnitude > mean_magnitude
-    
-    # Apply thresholding to frame difference
-    thresh = cv2.threshold(frame_diff, 20, 255, cv2.THRESH_BINARY)[1]
-    
-    # Apply morphological operations
-    kernel = np.ones((3,3), np.uint8)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-    
-    # Calculate motion metrics
-    motion_ratio = cv2.countNonZero(thresh) / (thresh.shape[0] * thresh.shape[1])
-    
-    # Create a combined motion score using both difference and flow
-    flow_score = np.mean(magnitude[flow_mask]) if np.any(flow_mask) else 0
-    combined_score = (motion_ratio + flow_score) / 2
-    
-    return combined_score > 0.01, thresh, combined_score, magnitude
-
-def is_video_static(prev_frame, curr_frame, threshold=0.98):
-    """
-    Check if the video feed is static by comparing consecutive frames.
-    Returns True if frames are nearly identical (static), False otherwise.
-    """
-    if prev_frame is None or curr_frame is None:
-        return False
+class FireDetectionSystem:
+    def __init__(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.setup_model()
+        self.setup_transforms()
+        self.load_config()
+        self.frame_buffer = []
+        self.alert_queue = queue.Queue()
+        self.last_alert_time = datetime.now() - timedelta(minutes=5)
+        self.fire_detected_count = 0
+        self.consecutive_static_frames = 0
+        # Add detection time tracking
+        self.first_detection_time = None
+        self.continuous_detection = False
         
-    # Convert frames to grayscale
-    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-    curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
-    
-    # Calculate structural similarity index
-    score = cv2.matchTemplate(prev_gray, curr_gray, cv2.TM_CCOEFF_NORMED)[0][0]
-    
-    return score > threshold
-
-def save_screenshot(frame, confidence):
-    """
-    Save a screenshot of the frame when fire is detected
-    """
-    # Create screenshots directory if it doesn't exist
-    screenshots_dir = "fire_screenshots"
-    if not os.path.exists(screenshots_dir):
-        os.makedirs(screenshots_dir)
-    
-    # Generate filename with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{screenshots_dir}/fire_detected_{timestamp}_conf_{confidence:.2f}.jpg"
-    
-    # Save the image
-    cv2.imwrite(filename, frame)
-    print(f"Screenshot saved: {filename}")
-
-def check_fire_in_live_video():
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("Error: Could not open webcam.")
-        return
-
-    fire_start_time = None
-    fire_detected = False
-    alert_triggered = False
-    screenshot_taken = False
-    prev_frame = None
-    consecutive_detections = 0
-    system_pause_time = None
-    window_name = "Fire Detection"
-    cv2.namedWindow(window_name)
-    
-    # Initialize variables
-    avg_motion = 0
-    mean_diff = 0
-    is_fluctuating = False
-    
-    # Buffers for temporal analysis
-    frame_buffer = []
-    detection_buffer = []
-    motion_buffer = []
-    flow_buffer = []
-    BUFFER_SIZE = 10
-    FRAME_BUFFER_SIZE = 5
-    DETECTION_THRESHOLD = 0.5
-    MOTION_THRESHOLD = 0.2
-    
-    # Initialize frame counter and timing variables
-    frame_counter = 0
-    fps_start_time = time.time()
-    fps = 0
-    last_check_time = time.time()
-    check_interval = 2.0  
-    is_live_video = True  
-    static_count = 0
-    max_static_count = 30  # Number of consecutive static frames before warning
-    
-    try:
-        while cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) > 0:
-            if system_pause_time is not None:
-                current_time = datetime.now()
-                if current_time - system_pause_time >= timedelta(seconds=15):
-                    print("Restarting detection after 15-second pause...")
-                    system_pause_time = None
-                    break
-                else:
-                    time.sleep(1)
-                    continue
-
-            ret, frame = cap.read()
-            if not ret:
-                print("Error: Could not read frame from webcam.")
-                break
-
-            current_time = time.time()
-
-            # Update frame buffer
-            frame_buffer.append(frame.copy())
-            if len(frame_buffer) > FRAME_BUFFER_SIZE:
-                frame_buffer.pop(0)
-
-            # Check live/static status every 2 seconds
-            if current_time - last_check_time >= check_interval and len(frame_buffer) >= 2:
-                # Analyze temporal patterns
-                is_fluctuating, mean_diff = analyze_temporal_patterns(frame_buffer)
-                
-                # Check for motion
-                has_motion, motion_mask, motion_score, flow_magnitude = detect_motion(prev_frame, frame)
-                
-                # Update motion buffer
-                if motion_score is not None:  
-                    motion_buffer.append(motion_score)
-                    if len(motion_buffer) > BUFFER_SIZE:
-                        motion_buffer.pop(0)
-                
-                # Calculate average motion
-                if motion_buffer:  
-                    avg_motion = sum(motion_buffer) / len(motion_buffer)
-                
-                # Update live video status
-                is_live_video = (avg_motion > 0.005 and is_fluctuating and mean_diff > 1.0)
-                last_check_time = current_time
-
-            # Calculate FPS
-            frame_counter += 1
-            if frame_counter >= 30:
-                fps = frame_counter / (current_time - fps_start_time)
-                frame_counter = 0
-                fps_start_time = current_time
-
-            # Enhance the frame
-            enhanced_frame = enhance_frame(frame)
+    def setup_model(self):
+        try:
+            self.model = models.resnet18(weights="IMAGENET1K_V1")
+            num_features = self.model.fc.in_features
+            self.model.fc = nn.Linear(num_features, 2)
+            model_path = "best_fire_detection_model.pth"
             
-            if not is_live_video:
-                cv2.putText(enhanced_frame, "STATIC IMAGE DETECTED - MONITORING PAUSED", (10, 30), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                cv2.imshow(window_name, enhanced_frame)
-                cv2.waitKey(1)
-                prev_frame = frame.copy()
-                continue
-            
-            # Check if video is static
-            if prev_frame is not None:
-                if is_video_static(prev_frame, frame):
-                    static_count += 1
-                    if static_count >= max_static_count:
-                        cv2.putText(enhanced_frame, "Warning: Static Video Feed Detected!", 
-                                  (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 
-                                  (0, 0, 255), 2)
-                else:
-                    static_count = 0
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"Model file {model_path} not found!")
                 
-            # Check for fire colors
-            is_fire, fire_mask = is_fire_colored(enhanced_frame)
-            
-            # Convert frame for model input
-            frame_rgb = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(frame_rgb)
-            input_tensor = data_transforms(pil_image).unsqueeze(0).to(device)
+            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+            self.model = self.model.to(self.device)
+            self.model.eval()
+            logging.info("Model loaded successfully")
+        except Exception as e:
+            logging.error(f"Error loading model: {e}")
+            raise
 
-            # Model prediction
-            with torch.no_grad():
-                outputs = model(input_tensor)
-                probabilities = nn.Softmax(dim=1)(outputs)
-                confidence, predicted = torch.max(probabilities, 1)
+    def setup_transforms(self):
+        self.data_transforms = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
 
-            is_model_confident = predicted.item() == 1 and confidence.item() > 0.85
-
-            prev_frame = frame.copy()
-
-            # Update detection buffer
-            current_detection = is_model_confident and is_fire
-            detection_buffer.append(current_detection)
-            if len(detection_buffer) > BUFFER_SIZE:
-                detection_buffer.pop(0)
-
-            # Calculate detection ratio
-            detection_ratio = sum(detection_buffer) / len(detection_buffer)
-            
-            # Only proceed if we have enough consistent detections
-            if detection_ratio >= DETECTION_THRESHOLD:
-                consecutive_detections += 1
-                if consecutive_detections >= 3:
-                    if fire_start_time is None:
-                        fire_start_time = time.time()
-                    elif time.time() - fire_start_time >= 4.0: 
-                        if not alert_triggered:
-                            send_alert("Fire Alert!", "Live fire detected in the video feed!")
-                            alert_triggered = True
-                        
-                        if not screenshot_taken:
-                            save_screenshot(enhanced_frame, confidence.item())
-                            screenshot_taken = True
-                        
-                        fire_detected = True
-                        cv2.putText(enhanced_frame, "LIVE FIRE DETECTED!", (10, 30), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+    def load_config(self):
+        config_path = "fire_detection_config.json"
+        default_config = {
+            "min_confidence": 0.7,      # Increased for better accuracy
+            "frame_buffer_size": 10,
+            "alert_cooldown_minutes": 5,
+            "min_fire_size_ratio": 0.005,
+            "motion_threshold": 0.98,
+            "consecutive_detections_threshold": 3,
+            "constant_detection_seconds": 3,
+            "color_detection": {
+                "min_saturation": 85,    # Adjusted for better color discrimination
+                "min_value": 120,
+                "red_hue_ranges": [[0, 12], [165, 180]],  # Tightened ranges
+                "yellow_hue_range": [12, 30],
+                "min_intensity_ratio": 0.4,
+                "intensity_threshold": 160,
+                "max_roundness": 0.85,    # Maximum roundness ratio for fire regions
+                "min_aspect_ratio": 1.2,  # Minimum aspect ratio for fire regions
+                "edge_threshold": 50      # Threshold for edge detection
+            }
+        }
+        
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    loaded_config = json.load(f)
+                    # Ensure all default config keys exist in loaded config
+                    self.config = default_config.copy()
+                    self.config.update(loaded_config)
             else:
-                consecutive_detections = max(0, consecutive_detections - 1)
-                if consecutive_detections == 0:
-                    fire_start_time = None
-                    fire_detected = False
-                    alert_triggered = False
-                    screenshot_taken = False
+                self.config = default_config
+                with open(config_path, 'w') as f:
+                    json.dump(default_config, f, indent=4)
+            logging.info("Configuration loaded successfully")
+        except Exception as e:
+            logging.warning(f"Error loading config: {e}. Using default values.")
+            self.config = default_config
 
-            # Display status information
-            cv2.putText(enhanced_frame, f"FPS: {fps:.1f}", (10, enhanced_frame.shape[0] - 120), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(enhanced_frame, f"Motion: {avg_motion:.3f}", (10, enhanced_frame.shape[0] - 90), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(enhanced_frame, f"Temporal Change: {mean_diff:.3f}", (10, enhanced_frame.shape[0] - 60), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(enhanced_frame, f"Detection Ratio: {detection_ratio:.2f}", (10, enhanced_frame.shape[0] - 30), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    def enhance_frame(self, frame):
+        try:
+            lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+            cl = clahe.apply(l)
+            enhanced_lab = cv2.merge((cl, a, b))
+            enhanced_bgr = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
             
-            status_color = (0, 255, 0) if not fire_detected else (0, 0, 255)
-            status_msg = "MONITORING LIVE VIDEO"
-            if fire_start_time is not None and not fire_detected:
-                remaining_time = max(0, 4.0 - (time.time() - fire_start_time))
-                status_msg = f"Potential Fire - Confirming ({remaining_time:.1f}s)"
-            elif fire_detected:
-                status_msg = "LIVE FIRE ALERT"
+            # Additional enhancement for better fire detection
+            enhanced_bgr = cv2.detailEnhance(enhanced_bgr, sigma_s=10, sigma_r=0.15)
+            return enhanced_bgr
+        except Exception as e:
+            logging.error(f"Error in frame enhancement: {e}")
+            return frame
+
+    def analyze_light_characteristics(self, frame, roi, mask):
+        """Analyze if the region has characteristics of artificial light or reflection."""
+        try:
+            # Convert ROI to grayscale if it's not already
+            if len(roi.shape) > 2:
+                roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            else:
+                roi_gray = roi
+
+            # Edge detection
+            edges = cv2.Canny(roi_gray, 50, 150)
+            edge_density = np.sum(edges > 0) / edges.size
+
+            # Check for uniform intensity (characteristic of artificial lights)
+            intensity_std = np.std(roi_gray)
+            mean_intensity = np.mean(roi_gray)
+            intensity_variation_ratio = intensity_std / (mean_intensity + 1e-6)
+
+            # Check for sudden intensity changes (characteristic of reflections)
+            gradient_x = cv2.Sobel(roi_gray, cv2.CV_64F, 1, 0, ksize=3)
+            gradient_y = cv2.Sobel(roi_gray, cv2.CV_64F, 0, 1, ksize=3)
+            gradient_magnitude = np.sqrt(gradient_x**2 + gradient_y**2)
+            gradient_mean = np.mean(gradient_magnitude)
+
+            # Calculate texture features
+            glcm = np.zeros((256, 256), dtype=np.uint8)
+            for i in range(roi_gray.shape[0]-1):
+                for j in range(roi_gray.shape[1]-1):
+                    i_intensity = roi_gray[i, j]
+                    j_intensity = roi_gray[i, j+1]
+                    glcm[i_intensity, j_intensity] += 1
+
+            glcm_norm = glcm / (glcm.sum() + 1e-6)
+            texture_uniformity = np.sum(glcm_norm**2)
+
+            # Characteristics of artificial light/reflection:
+            is_artificial = (
+                edge_density < 0.05 or           # Very few edges
+                intensity_variation_ratio < 0.1 or  # Too uniform
+                texture_uniformity > 0.8 or      # Too uniform texture
+                gradient_mean < 5                # Too smooth gradients
+            )
+
+            return not is_artificial
+
+        except Exception as e:
+            logging.error(f"Error in light characteristics analysis: {e}")
+            return True  # Default to true to avoid false negatives
+
+    def analyze_color_patterns(self, frame):
+        try:
+            enhanced_frame = self.enhance_frame(frame)
+            hsv = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2HSV)
+            gray = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2GRAY)
             
-            cv2.putText(enhanced_frame, f"Status: {status_msg}",
-                      (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+            # Get color detection parameters from config
+            color_config = self.config.get("color_detection", {})
+            min_s = color_config.get("min_saturation", 85)
+            min_v = color_config.get("min_value", 120)
+            red_ranges = color_config.get("red_hue_ranges", [[0, 12], [165, 180]])
+            yellow_range = color_config.get("yellow_hue_range", [12, 30])
+            min_intensity_ratio = color_config.get("min_intensity_ratio", 0.4)
+            intensity_threshold = color_config.get("intensity_threshold", 160)
+            max_roundness = color_config.get("max_roundness", 0.85)
+            min_aspect_ratio = color_config.get("min_aspect_ratio", 1.2)
+            edge_threshold = color_config.get("edge_threshold", 50)
 
-            cv2.imshow(window_name, enhanced_frame)
-            cv2.waitKey(1)
+            # Create masks for different color ranges
+            masks = []
+            
+            # Red masks (both ranges)
+            for red_range in red_ranges:
+                lower_red = np.array([red_range[0], min_s, min_v])
+                upper_red = np.array([red_range[1], 255, 255])
+                red_mask = cv2.inRange(hsv, lower_red, upper_red)
+                masks.append(red_mask)
+            
+            # Yellow mask
+            lower_yellow = np.array([yellow_range[0], min_s, min_v])
+            upper_yellow = np.array([yellow_range[1], 255, 255])
+            yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+            masks.append(yellow_mask)
+            
+            # Combine all color masks
+            combined_mask = np.zeros_like(masks[0])
+            for mask in masks:
+                combined_mask = cv2.bitwise_or(combined_mask, mask)
+            
+            # Apply morphological operations
+            kernel = np.ones((5, 5), np.uint8)
+            combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+            combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+            
+            # Find and filter contours
+            contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            min_contour_area = frame.shape[0] * frame.shape[1] * self.config["min_fire_size_ratio"]
+            valid_contours = []
+            
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if area > min_contour_area:
+                    # Get the region of the contour
+                    x, y, w, h = cv2.boundingRect(cnt)
+                    
+                    # Check aspect ratio
+                    aspect_ratio = max(w, h) / (min(w, h) + 1e-6)
+                    if aspect_ratio < min_aspect_ratio:
+                        continue
+                    
+                    # Check roundness
+                    perimeter = cv2.arcLength(cnt, True)
+                    roundness = 4 * np.pi * area / (perimeter * perimeter + 1e-6)
+                    if roundness > max_roundness:
+                        continue
+                    
+                    # Get ROI for further analysis
+                    roi = frame[y:y+h, x:x+w]
+                    roi_mask = combined_mask[y:y+h, x:x+w]
+                    
+                    # Check if region has fire-like characteristics
+                    if self.analyze_light_characteristics(frame, roi, roi_mask):
+                        valid_contours.append(cnt)
+            
+            # Convert valid contours to regions
+            fire_regions = [cv2.boundingRect(cnt) for cnt in valid_contours]
+            
+            # Final decision
+            is_fire = len(valid_contours) > 0
+            
+            return is_fire, combined_mask, fire_regions
 
-    except cv2.error as e:
-        print(f"OpenCV Error: {e}")
-    finally:
-        cap.release()
-        cv2.destroyAllWindows()
+        except Exception as e:
+            logging.error(f"Error in color pattern analysis: {e}")
+            return False, None, []
+
+    def analyze_temporal_patterns(self):
+        if len(self.frame_buffer) < 2:
+            return False, 0
+
+        try:
+            gray_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in self.frame_buffer]
+            diffs = [np.mean(cv2.absdiff(gray_frames[i], gray_frames[i+1])) 
+                    for i in range(len(gray_frames)-1)]
+
+            mean_diff = np.mean(diffs)
+            std_diff = np.std(diffs)
+            
+            # Safer frequency analysis
+            frequency_analysis = np.fft.fft(diffs)
+            frequency_magnitudes = np.abs(frequency_analysis)
+            # Only analyze if we have enough data points
+            if len(frequency_magnitudes) > 1:
+                dominant_frequency = np.argmax(frequency_magnitudes[1:]) + 1
+                is_fluctuating = (std_diff > 2.0 and mean_diff > 1.0 and 
+                                dominant_frequency > 1 and dominant_frequency < len(diffs)//2)
+            else:
+                is_fluctuating = std_diff > 2.0 and mean_diff > 1.0
+            
+            return is_fluctuating, mean_diff
+        except Exception as e:
+            logging.error(f"Error in temporal pattern analysis: {e}")
+            return False, 0
+
+    def detect_motion(self, prev_frame, curr_frame):
+        if prev_frame is None:
+            return False, None, 0
+
+        try:
+            prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+            curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+            
+            # Multi-scale motion detection
+            flow = cv2.calcOpticalFlowFarneback(
+                prev_gray, curr_gray, None, 
+                pyr_scale=0.5, levels=3, winsize=15,
+                iterations=3, poly_n=5, poly_sigma=1.2, flags=0
+            )
+            
+            magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+            mean_magnitude = np.mean(magnitude)
+            
+            # Advanced motion analysis
+            motion_mask = magnitude > mean_magnitude
+            motion_ratio = np.sum(motion_mask) / motion_mask.size
+            
+            return motion_ratio > 0.01, motion_mask, mean_magnitude
+        except Exception as e:
+            logging.error(f"Error in motion detection: {e}")
+            return False, None, 0
+
+    def save_detection_data(self, frame, confidence, fire_regions):
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            detection_dir = Path("fire_detections")
+            detection_dir.mkdir(exist_ok=True)
+            
+            # Save annotated frame
+            annotated_frame = frame.copy()
+            for x, y, w, h in fire_regions:
+                cv2.rectangle(annotated_frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                cv2.putText(annotated_frame, f"Fire: {confidence:.2f}", 
+                           (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            
+            cv2.imwrite(str(detection_dir / f"fire_detection_{timestamp}.jpg"), annotated_frame)
+            
+            # Save detection metadata
+            metadata = {
+                "timestamp": timestamp,
+                "confidence": float(confidence),
+                "fire_regions": fire_regions,
+                "device": str(self.device)
+            }
+            with open(detection_dir / f"detection_{timestamp}.json", 'w') as f:
+                json.dump(metadata, f, indent=4)
+                
+        except Exception as e:
+            logging.error(f"Error saving detection data: {e}")
+
+    def send_alert(self, confidence, fire_regions):
+        current_time = datetime.now()
+        if (current_time - self.last_alert_time).total_seconds() < self.config["alert_cooldown_minutes"] * 60:
+            return
+
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes('-topmost', True)
+            
+            alert_message = (
+                f"Fire detected with {confidence:.2f}% confidence!\n"
+                f"Number of fire regions: {len(fire_regions)}\n"
+                f"Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            
+            messagebox.showwarning("FIRE ALERT!", alert_message)
+            root.destroy()
+            
+            self.last_alert_time = current_time
+            logging.warning(f"Fire alert sent: {alert_message}")
+            
+        except Exception as e:
+            logging.error(f"Error sending alert: {e}")
+
+    def process_frame(self, frame):
+        try:
+            # Convert frame for model input
+            pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            input_tensor = self.data_transforms(pil_image).unsqueeze(0).to(self.device)
+            
+            with torch.no_grad():
+                output = self.model(input_tensor)
+                probabilities = torch.softmax(output, dim=1)
+                confidence = probabilities[0][1].item()  # Probability of fire class
+            
+            # Multiple analysis methods
+            color_detected, color_mask, fire_regions = self.analyze_color_patterns(frame)
+            temporal_detected, _ = self.analyze_temporal_patterns()
+            motion_detected, _, _ = self.detect_motion(
+                self.frame_buffer[-1] if self.frame_buffer else None, 
+                frame
+            )
+            
+            # Less strict combination of detection methods
+            current_detection = (
+                confidence > self.config["min_confidence"] and 
+                color_detected and 
+                (temporal_detected or motion_detected)
+            )
+            
+            current_time = datetime.now()
+            
+            # Handle continuous detection logic
+            constant_detection_seconds = self.config.get("constant_detection_seconds", 3)  # Default to 3 if not found
+            
+            if current_detection:
+                if self.first_detection_time is None:
+                    self.first_detection_time = current_time
+                    self.continuous_detection = False
+                elif (current_time - self.first_detection_time).total_seconds() >= constant_detection_seconds:
+                    self.continuous_detection = True
+            else:
+                self.first_detection_time = None
+                self.continuous_detection = False
+            
+            # Update frame buffer
+            self.frame_buffer.append(frame)
+            if len(self.frame_buffer) > self.config["frame_buffer_size"]:
+                self.frame_buffer.pop(0)
+            
+            if self.continuous_detection:
+                self.fire_detected_count += 1
+                if self.fire_detected_count >= self.config["consecutive_detections_threshold"]:
+                    self.save_detection_data(frame, confidence * 100, fire_regions)
+                    self.send_alert(confidence * 100, fire_regions)
+            else:
+                self.fire_detected_count = max(0, self.fire_detected_count - 1)
+            
+            return self.continuous_detection, confidence, color_mask if color_detected else None, fire_regions, current_detection
+            
+        except Exception as e:
+            logging.error(f"Error processing frame: {e}")
+            return False, 0.0, None, [], False
+
+    def run_detection(self):
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            logging.error("Error: Could not open webcam.")
+            return
+
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    logging.error("Error: Could not read frame.")
+                    break
+
+                is_fire, confidence, mask, fire_regions, current_detection = self.process_frame(frame)
+                
+                # Display results
+                display_frame = frame.copy()
+                
+                # Add detection status visualization
+                status_text = "Detecting..." if current_detection else "No Fire"
+                if current_detection and not self.continuous_detection:
+                    constant_detection_seconds = self.config.get("constant_detection_seconds", 3)
+                    remaining_time = max(0, constant_detection_seconds - 
+                                      (datetime.now() - self.first_detection_time).total_seconds())
+                    status_text = f"Validating... {remaining_time:.1f}s"
+                elif self.continuous_detection:
+                    status_text = "FIRE DETECTED!"
+
+                cv2.putText(display_frame, status_text, (10, 30), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                
+                if is_fire and mask is not None:
+                    # Overlay fire detection visualization
+                    mask_colored = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+                    mask_colored[mask > 0] = [0, 0, 255]  # Red color for fire regions
+                    display_frame = cv2.addWeighted(display_frame, 0.7, mask_colored, 0.3, 0)
+                    
+                    for x, y, w, h in fire_regions:
+                        cv2.rectangle(display_frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                        cv2.putText(display_frame, f"Fire: {confidence:.2f}", 
+                                  (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+                cv2.imshow('Fire Detection', display_frame)
+                
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+        except Exception as e:
+            logging.error(f"Error in main detection loop: {e}")
+        finally:
+            cap.release()
+            cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    check_fire_in_live_video()
+    try:
+        detector = FireDetectionSystem()
+        detector.run_detection()
+    except Exception as e:
+        logging.critical(f"Critical error in main program: {e}")
