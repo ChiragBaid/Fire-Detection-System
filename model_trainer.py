@@ -6,27 +6,65 @@ from torchvision import models, transforms
 from torch.utils.data import DataLoader, Dataset, random_split
 from PIL import Image
 from tqdm import tqdm
+import numpy as np
+import cv2
+from skimage.feature import graycomatrix, graycoprops
 
-class FireDataset(Dataset):
+class TextureFeatureExtractor:
+    def __init__(self):
+        self.distances = [1, 2, 3]
+        self.angles = [0, np.pi/4, np.pi/2, 3*np.pi/4]
+        self.properties = ['contrast', 'dissimilarity', 'homogeneity', 'energy', 'correlation']
+        
+    def extract_features(self, img):
+        # Convert to grayscale if needed
+        if len(img.shape) == 3:
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = img
+            
+        # Normalize to 8-bit
+        if gray.dtype != np.uint8:
+            gray = (gray * 255).astype(np.uint8)
+            
+        # Calculate GLCM
+        glcm = graycomatrix(gray, distances=self.distances, angles=self.angles,
+                           symmetric=True, normed=True)
+        
+        # Extract features
+        features = []
+        for prop in self.properties:
+            feature = graycoprops(glcm, prop).ravel()
+            features.extend(feature)
+            
+        return np.array(features)
+
+class FireTextureDataset(Dataset):
     def __init__(self, fire_dir, nofire_dir, transform=None, generate_crops=True):
         self.transform = transform
         self.generate_crops = generate_crops
         self.images = []
         self.labels = []
+        self.texture_extractor = TextureFeatureExtractor()
         
         # Load fire images (label 1)
         for img_name in os.listdir(fire_dir):
             if img_name.lower().endswith(('.png', '.jpg', '.jpeg')):
                 img_path = os.path.join(fire_dir, img_name)
-                self.images.append((img_path, True))  # True indicates fire image
+                self.images.append((img_path, True))
                 self.labels.append(1)
         
         # Load no-fire images (label 0)
         for img_name in os.listdir(nofire_dir):
             if img_name.lower().endswith(('.png', '.jpg', '.jpeg')):
                 img_path = os.path.join(nofire_dir, img_name)
-                self.images.append((img_path, False))  # False indicates no-fire image
+                self.images.append((img_path, False))
                 self.labels.append(0)
+    
+    def extract_texture_features(self, image):
+        # Convert PIL Image to numpy array
+        img_array = np.array(image)
+        return self.texture_extractor.extract_features(img_array)
     
     def __len__(self):
         return len(self.images)
@@ -49,37 +87,154 @@ class FireDataset(Dataset):
         if is_fire and self.generate_crops:
             # For fire images, create additional crops
             crops = []
+            texture_features = []
             
             # Original image
             if self.transform:
                 crops.append(self.transform(image))
+                texture_features.append(torch.FloatTensor(self.extract_texture_features(image)))
             
             # Create smaller crops
             for size in [2, 3, 4]:
                 crop = self.create_crop(image, size)
                 if self.transform:
                     crops.append(self.transform(crop))
+                    texture_features.append(torch.FloatTensor(self.extract_texture_features(crop)))
             
-            return torch.stack(crops), torch.tensor([label] * len(crops))
+            return (torch.stack(crops), 
+                   torch.stack(texture_features)), torch.tensor([label] * len(crops))
         else:
             if self.transform:
-                image = self.transform(image)
-            return image.unsqueeze(0), torch.tensor([label])
+                transformed_image = self.transform(image)
+                texture_features = torch.FloatTensor(self.extract_texture_features(image))
+            return (transformed_image.unsqueeze(0), 
+                   texture_features.unsqueeze(0)), torch.tensor([label])
+
+class FireTextureNet(nn.Module):
+    def __init__(self, num_texture_features):
+        super(FireTextureNet, self).__init__()
+        
+        # Load pre-trained ResNet
+        self.resnet = models.resnet18(weights="IMAGENET1K_V1")
+        num_features = self.resnet.fc.in_features
+        self.resnet.fc = nn.Identity()  # Remove final FC layer
+        
+        # Texture feature processing
+        self.texture_fc = nn.Sequential(
+            nn.Linear(num_texture_features, 64),
+            nn.ReLU(),
+            nn.Dropout(0.3)
+        )
+        
+        # Combined features processing
+        self.combined_fc = nn.Sequential(
+            nn.Linear(num_features + 64, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, 2)
+        )
+        
+    def forward(self, x):
+        img, texture_features = x
+        
+        # Process image through ResNet
+        img_features = self.resnet(img)
+        
+        # Process texture features
+        texture_processed = self.texture_fc(texture_features)
+        
+        # Combine features
+        combined = torch.cat((img_features, texture_processed), dim=1)
+        
+        # Final classification
+        return self.combined_fc(combined)
 
 def collate_fn(batch):
-    """Custom collate function to handle different sized batches"""
+    """Custom collate function to handle different sized batches with texture features"""
     images = []
+    texture_features = []
     labels = []
     
-    for img, lbl in batch:
+    for (img, tex), lbl in batch:
         images.append(img)
+        texture_features.append(tex)
         labels.append(lbl)
     
-    # Concatenate all images and labels
+    # Concatenate all images, texture features, and labels
     images = torch.cat(images, dim=0)
+    texture_features = torch.cat(texture_features, dim=0)
     labels = torch.cat(labels, dim=0)
     
-    return images, labels
+    return (images, texture_features), labels
+
+def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=25):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    best_val_acc = 0.0
+    
+    for epoch in range(num_epochs):
+        print(f'Epoch {epoch+1}/{num_epochs}')
+        print('-' * 10)
+        
+        # Training phase
+        model.train()
+        running_loss = 0.0
+        running_corrects = 0
+        total_samples = 0
+        
+        for (inputs, texture_features), labels in tqdm(train_loader):
+            inputs = inputs.to(device)
+            texture_features = texture_features.to(device)
+            labels = labels.to(device)
+            
+            optimizer.zero_grad()
+            
+            outputs = model((inputs, texture_features))
+            _, preds = torch.max(outputs, 1)
+            loss = criterion(outputs, labels)
+            
+            loss.backward()
+            optimizer.step()
+            
+            running_loss += loss.item() * inputs.size(0)
+            running_corrects += torch.sum(preds == labels)
+            total_samples += labels.size(0)
+        
+        epoch_loss = running_loss / total_samples
+        epoch_acc = running_corrects.double() / total_samples
+        print(f'Training Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
+        
+        # Validation phase
+        model.eval()
+        running_loss = 0.0
+        running_corrects = 0
+        total_samples = 0
+        
+        with torch.no_grad():
+            for (inputs, texture_features), labels in tqdm(val_loader):
+                inputs = inputs.to(device)
+                texture_features = texture_features.to(device)
+                labels = labels.to(device)
+                
+                outputs = model((inputs, texture_features))
+                _, preds = torch.max(outputs, 1)
+                loss = criterion(outputs, labels)
+                
+                running_loss += loss.item() * inputs.size(0)
+                running_corrects += torch.sum(preds == labels)
+                total_samples += labels.size(0)
+        
+        epoch_loss = running_loss / total_samples
+        epoch_acc = running_corrects.double() / total_samples
+        print(f'Validation Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
+        
+        # Save best model
+        if epoch_acc > best_val_acc:
+            best_val_acc = epoch_acc
+            torch.save(model.state_dict(), 'best_fire_detection_model.pth')
+            print(f'New best model saved with accuracy: {best_val_acc:.4f}')
+        
+        print()
 
 # Training transforms with extensive augmentation
 train_transform = transforms.Compose([
@@ -104,115 +259,34 @@ val_transform = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=25):
-    device = torch.device("cpu")
-    model = model.to(device)
-    best_acc = 0.0
-    
-    for epoch in range(num_epochs):
-        print(f'\nEpoch {epoch+1}/{num_epochs}')
-        print('-' * 10)
-        
-        # Training phase
-        model.train()
-        running_loss = 0.0
-        running_corrects = 0
-        total_samples = 0
-        
-        for inputs, labels in tqdm(train_loader, desc='Training'):
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            _, preds = torch.max(outputs, 1)
-            loss = criterion(outputs, labels)
-            
-            loss.backward()
-            optimizer.step()
-            
-            running_loss += loss.item() * inputs.size(0)
-            running_corrects += torch.sum(preds == labels.data)
-            total_samples += inputs.size(0)
-        
-        epoch_loss = running_loss / total_samples
-        epoch_acc = running_corrects.double() / total_samples
-        print(f'Training Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
-        
-        # Validation phase
-        model.eval()
-        running_loss = 0.0
-        running_corrects = 0
-        total_samples = 0
-        
-        with torch.no_grad():
-            for inputs, labels in tqdm(val_loader, desc='Validation'):
-                inputs = inputs.to(device)
-                labels = labels.to(device)
-                
-                outputs = model(inputs)
-                _, preds = torch.max(outputs, 1)
-                loss = criterion(outputs, labels)
-                
-                running_loss += loss.item() * inputs.size(0)
-                running_corrects += torch.sum(preds == labels.data)
-                total_samples += inputs.size(0)
-            
-            epoch_loss = running_loss / total_samples
-            epoch_acc = running_corrects.double() / total_samples
-            print(f'Validation Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
-            
-            # Save best model
-            if epoch_acc > best_acc:
-                best_acc = epoch_acc
-                torch.save(model.state_dict(), 'Models/best_fire_detection_model.pth')
-                print(f'New best model saved with accuracy: {epoch_acc:.4f}')
-    
-    return model
-
 if __name__ == "__main__":
     # Dataset paths
     fire_dir = r"C:\Users\Admin\Desktop\Fire Detection From a Video\Datasets\fire"
     nofire_dir = r"C:\Users\Admin\Desktop\Fire Detection From a Video\Datasets\no_fire"
     
-    # Create datasets with appropriate transforms
-    train_dataset = FireDataset(fire_dir, nofire_dir, transform=train_transform, generate_crops=True)
-    val_dataset = FireDataset(fire_dir, nofire_dir, transform=val_transform, generate_crops=False)
+    # Create datasets with texture analysis
+    texture_extractor = TextureFeatureExtractor()
+    full_dataset = FireTextureDataset(fire_dir, nofire_dir, transform=train_transform)
     
-    # Split datasets
-    train_size = int(0.8 * len(train_dataset))
-    val_size = len(train_dataset) - train_size
-    train_indices = list(range(train_size))
-    val_indices = list(range(train_size, len(train_dataset)))
+    # Calculate number of features
+    sample_image = Image.open(full_dataset.images[0][0]).convert('RGB')
+    num_texture_features = len(texture_extractor.extract_features(np.array(sample_image)))
     
-    # Create data loaders with custom collate function
-    train_loader = DataLoader(
-        train_dataset, 
-        batch_size=8,  
-        shuffle=True,
-        collate_fn=collate_fn
-    )
+    # Split dataset
+    train_size = int(0.8 * len(full_dataset))
+    val_size = len(full_dataset) - train_size
+    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
     
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=16,
-        shuffle=False,
-        collate_fn=collate_fn
-    )
-
-    # Initialize model
-    model = models.resnet18(weights="IMAGENET1K_V1")
-    num_ftrs = model.fc.in_features
-    model.fc = nn.Linear(num_ftrs, 2)
+    # Create data loaders
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True,
+                            collate_fn=collate_fn, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False,
+                          collate_fn=collate_fn, num_workers=4)
     
-    # Loss and optimizer
+    # Create model with texture features
+    model = FireTextureNet(num_texture_features)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
     # Train model
-    print("Starting training...")
-    trained_model = train_model(model, train_loader, val_loader, criterion, optimizer)
-    
-    # Save final model
-    torch.save(trained_model.state_dict(), "Models/final_fire_detection_model.pth")
-    print("Training completed!")
+    train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=25)
