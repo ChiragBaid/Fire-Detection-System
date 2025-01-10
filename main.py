@@ -1,10 +1,16 @@
 import os
-import torch
 import cv2
-import torch.nn as nn
 import numpy as np
-from torchvision import transforms, models
+import torch
+import torch.nn as nn
+from torchvision import models, transforms
 from PIL import Image
+import logging
+import json
+import queue
+import datetime
+import threading
+from skimage.feature import graycomatrix, graycoprops
 import tkinter as tk
 from tkinter import messagebox
 import time
@@ -25,11 +31,79 @@ logging.basicConfig(
     ]
 )
 
+class TextureFeatureExtractor:
+    def __init__(self):
+        self.distances = [1, 2, 3]
+        self.angles = [0, np.pi/4, np.pi/2, 3*np.pi/4]
+        self.properties = ['contrast', 'dissimilarity', 'homogeneity', 'energy', 'correlation']
+        
+    def extract_features(self, img):
+        # Convert to grayscale if needed
+        if len(img.shape) == 3:
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = img
+            
+        # Normalize to 8-bit
+        if gray.dtype != np.uint8:
+            gray = (gray * 255).astype(np.uint8)
+            
+        # Calculate GLCM
+        glcm = graycomatrix(gray, distances=self.distances, angles=self.angles,
+                           symmetric=True, normed=True)
+        
+        # Extract features
+        features = []
+        for prop in self.properties:
+            feature = graycoprops(glcm, prop).ravel()
+            features.extend(feature)
+            
+        return np.array(features)
+
+class FireTextureNet(nn.Module):
+    def __init__(self, num_texture_features):
+        super(FireTextureNet, self).__init__()
+        
+        # Load pre-trained ResNet
+        self.resnet = models.resnet18(weights="IMAGENET1K_V1")
+        num_features = self.resnet.fc.in_features
+        self.resnet.fc = nn.Identity()  # Remove final FC layer
+        
+        # Texture feature processing
+        self.texture_fc = nn.Sequential(
+            nn.Linear(num_texture_features, 64),
+            nn.ReLU(),
+            nn.Dropout(0.3)
+        )
+        
+        # Combined features processing
+        self.combined_fc = nn.Sequential(
+            nn.Linear(num_features + 64, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, 2)
+        )
+        
+    def forward(self, x):
+        img, texture_features = x
+        
+        # Process image through ResNet
+        img_features = self.resnet(img)
+        
+        # Process texture features
+        texture_processed = self.texture_fc(texture_features)
+        
+        # Combine features
+        combined = torch.cat((img_features, texture_processed), dim=1)
+        
+        # Final classification
+        return self.combined_fc(combined)
+
 class FireDetectionSystem:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.setup_model()
-        self.setup_transforms()
+        self.texture_extractor = TextureFeatureExtractor()
+        self.model = self.load_model("best_fire_detection_model.pth")
         self.load_config()
         self.frame_buffer = []
         self.alert_queue = queue.Queue()
@@ -39,31 +113,29 @@ class FireDetectionSystem:
         # Add detection time tracking
         self.first_detection_time = None
         self.continuous_detection = False
+        # Add screenshot directory
+        self.screenshot_dir = "fire_detections"
+        os.makedirs(self.screenshot_dir, exist_ok=True)
         
-    def setup_model(self):
+    def load_model(self, model_path):
         try:
-            self.model = models.resnet18(weights="IMAGENET1K_V1")
-            num_features = self.model.fc.in_features
-            self.model.fc = nn.Linear(num_features, 2)
-            model_path = "best_fire_detection_model.pth"
+            # Get number of texture features
+            sample_image = np.zeros((224, 224, 3), dtype=np.uint8)  # Create a dummy image
+            num_texture_features = len(self.texture_extractor.extract_features(sample_image))
             
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(f"Model file {model_path} not found!")
-                
-            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
-            self.model = self.model.to(self.device)
-            self.model.eval()
+            # Create model with correct architecture
+            model = FireTextureNet(num_texture_features)
+            
+            # Load state dict
+            state_dict = torch.load(model_path, map_location=self.device)
+            model.load_state_dict(state_dict)
+            model = model.to(self.device)
+            model.eval()
             logging.info("Model loaded successfully")
+            return model
         except Exception as e:
             logging.error(f"Error loading model: {e}")
             raise
-
-    def setup_transforms(self):
-        self.data_transforms = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
 
     def load_config(self):
         config_path = "fire_detection_config.json"
@@ -121,99 +193,182 @@ class FireDetectionSystem:
             return frame
 
     def analyze_light_characteristics(self, frame, roi, mask):
-        """Analyze if the region has characteristics of artificial light or reflection."""
+        """Analyze if the region has characteristics of artificial light or reflection,
+        with specific handling for low-light backgrounds and reflections."""
         try:
-            # Convert ROI to grayscale if it's not already
+            # Convert ROI to different color spaces for better analysis
             if len(roi.shape) > 2:
                 roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                roi_hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+                roi_lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB)
             else:
                 roi_gray = roi
+                roi_hsv = cv2.cvtColor(cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2HSV)
+                roi_lab = cv2.cvtColor(cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2LAB)
 
-            # Edge detection
+            # Low-light background analysis
+            mean_intensity = np.mean(roi_gray)
+            is_low_light = mean_intensity < 50
+
+            # Enhanced color variation analysis
+            hsv_channels = cv2.split(roi_hsv)
+            lab_channels = cv2.split(roi_lab)
+            
+            # Analyze temporal color variation (if region is static, likely a reflection)
+            color_std = np.std(hsv_channels[0])  # Hue standard deviation
+            sat_std = np.std(hsv_channels[1])
+            val_std = np.std(hsv_channels[2])
+            
+            # Check for color consistency in LAB space
+            a_std = np.std(lab_channels[1])  # a channel variation (green-red)
+            b_std = np.std(lab_channels[2])  # b channel variation (blue-yellow)
+            
+            # Calculate color variation ratios
+            sat_variation = sat_std / (np.mean(hsv_channels[1]) + 1e-6)
+            val_variation = val_std / (np.mean(hsv_channels[2]) + 1e-6)
+            
+            # Analyze edge characteristics
             edges = cv2.Canny(roi_gray, 50, 150)
             edge_density = np.sum(edges > 0) / edges.size
-
-            # Check for uniform intensity (characteristic of artificial lights)
-            intensity_std = np.std(roi_gray)
-            mean_intensity = np.mean(roi_gray)
-            intensity_variation_ratio = intensity_std / (mean_intensity + 1e-6)
-
-            # Check for sudden intensity changes (characteristic of reflections)
-            gradient_x = cv2.Sobel(roi_gray, cv2.CV_64F, 1, 0, ksize=3)
-            gradient_y = cv2.Sobel(roi_gray, cv2.CV_64F, 0, 1, ksize=3)
-            gradient_magnitude = np.sqrt(gradient_x**2 + gradient_y**2)
+            
+            # Analyze gradient patterns
+            sobelx = cv2.Sobel(roi_gray, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(roi_gray, cv2.CV_64F, 0, 1, ksize=3)
+            gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
+            gradient_direction = np.arctan2(sobely, sobelx)
+            
+            # Calculate gradient statistics
             gradient_mean = np.mean(gradient_magnitude)
+            gradient_std = np.std(gradient_magnitude)
+            direction_std = np.std(gradient_direction)
+            
+            # Enhanced texture analysis
+            glcm = self.calculate_glcm(roi_gray)
+            contrast = self.calculate_glcm_feature(glcm, 'contrast')
+            homogeneity = self.calculate_glcm_feature(glcm, 'homogeneity')
+            energy = self.calculate_glcm_feature(glcm, 'energy')
+            correlation = self.calculate_glcm_feature(glcm, 'correlation')
 
-            # Calculate texture features
-            glcm = np.zeros((256, 256), dtype=np.uint8)
-            for i in range(roi_gray.shape[0]-1):
-                for j in range(roi_gray.shape[1]-1):
-                    i_intensity = roi_gray[i, j]
-                    j_intensity = roi_gray[i, j+1]
-                    glcm[i_intensity, j_intensity] += 1
+            # Specific checks for orange/yellow reflections
+            is_reflection = (
+                (sat_variation < 0.15 or sat_variation > 0.8) or  # Either too uniform or too varied saturation
+                (val_variation < 0.1) or  # Too uniform brightness
+                (gradient_std / (gradient_mean + 1e-6) < 0.2) or  # Too uniform gradient
+                (direction_std < 0.3) or  # Too uniform gradient direction
+                (energy > 0.6) or  # Too uniform texture
+                (homogeneity > 0.9) or  # Too smooth texture
+                (contrast < 0.2)  # Too little contrast
+            )
 
-            glcm_norm = glcm / (glcm.sum() + 1e-6)
-            texture_uniformity = np.sum(glcm_norm**2)
-
-            # Characteristics of artificial light/reflection:
+            # Additional checks for artificial light patterns
             is_artificial = (
-                edge_density < 0.05 or           # Very few edges
-                intensity_variation_ratio < 0.1 or  # Too uniform
-                texture_uniformity > 0.8 or      # Too uniform texture
-                gradient_mean < 5                # Too smooth gradients
+                is_reflection or
+                (edge_density < 0.03) or  # Too few edges
+                (correlation > 0.95) or  # Too regular pattern
+                (a_std < 5 and b_std < 5)  # Too consistent color in LAB space
             )
 
             return not is_artificial
 
         except Exception as e:
             logging.error(f"Error in light characteristics analysis: {e}")
-            return True  # Default to true to avoid false negatives
+            return True
+
+    def calculate_glcm(self, image, distance=1, angles=[0, np.pi/4, np.pi/2, 3*np.pi/4]):
+        """Calculate Gray-Level Co-occurrence Matrix."""
+        glcm = np.zeros((256, 256))
+        for angle in angles:
+            dx = int(distance * np.cos(angle))
+            dy = int(distance * np.sin(angle))
+            for i in range(image.shape[0]-dx):
+                for j in range(image.shape[1]-dy):
+                    i_intensity = image[i, j]
+                    j_intensity = image[i+dx, j+dy]
+                    glcm[i_intensity, j_intensity] += 1
+        return glcm / (glcm.sum() + 1e-6)
+
+    def calculate_glcm_feature(self, glcm, feature):
+        """Calculate specific GLCM feature."""
+        if feature == 'contrast':
+            i, j = np.ogrid[0:256, 0:256]
+            return np.sum(glcm * ((i-j)**2))
+        elif feature == 'homogeneity':
+            i, j = np.ogrid[0:256, 0:256]
+            return np.sum(glcm / (1 + (i-j)**2))
+        elif feature == 'energy':
+            return np.sum(glcm**2)
+        elif feature == 'correlation':
+            i, j = np.ogrid[0:256, 0:256]
+            mu_i = np.sum(i * np.sum(glcm, axis=1))
+            mu_j = np.sum(j * np.sum(glcm, axis=0))
+            sigma_i = np.sqrt(np.sum((i - mu_i)**2 * np.sum(glcm, axis=1)))
+            sigma_j = np.sqrt(np.sum((j - mu_j)**2 * np.sum(glcm, axis=0)))
+            if sigma_i * sigma_j == 0:
+                return 0
+            return np.sum(glcm * (i - mu_i) * (j - mu_j)) / (sigma_i * sigma_j)
 
     def analyze_color_patterns(self, frame):
         try:
             enhanced_frame = self.enhance_frame(frame)
             hsv = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2HSV)
-            gray = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2GRAY)
+            lab = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2LAB)
             
             # Get color detection parameters from config
             color_config = self.config.get("color_detection", {})
-            min_s = color_config.get("min_saturation", 85)
-            min_v = color_config.get("min_value", 120)
-            red_ranges = color_config.get("red_hue_ranges", [[0, 12], [165, 180]])
-            yellow_range = color_config.get("yellow_hue_range", [12, 30])
-            min_intensity_ratio = color_config.get("min_intensity_ratio", 0.4)
-            intensity_threshold = color_config.get("intensity_threshold", 160)
-            max_roundness = color_config.get("max_roundness", 0.85)
-            min_aspect_ratio = color_config.get("min_aspect_ratio", 1.2)
-            edge_threshold = color_config.get("edge_threshold", 50)
-
-            # Create masks for different color ranges
+            min_s = color_config.get("min_saturation", 120)  # Increased saturation threshold
+            min_v = color_config.get("min_value", 150)
+            red_ranges = color_config.get("red_hue_ranges", [[0, 10], [170, 180]])  # Narrowed red range
+            orange_range = color_config.get("orange_range", [10, 20])  # Specific orange range
+            yellow_range = color_config.get("yellow_range", [20, 25])  # Narrowed yellow range
+            
             masks = []
             
-            # Red masks (both ranges)
+            # Red detection with stricter criteria
             for red_range in red_ranges:
                 lower_red = np.array([red_range[0], min_s, min_v])
                 upper_red = np.array([red_range[1], 255, 255])
                 red_mask = cv2.inRange(hsv, lower_red, upper_red)
                 masks.append(red_mask)
             
-            # Yellow mask
-            lower_yellow = np.array([yellow_range[0], min_s, min_v])
-            upper_yellow = np.array([yellow_range[1], 255, 255])
-            yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-            masks.append(yellow_mask)
+            # Orange and yellow detection with additional validation
+            for color_range in [orange_range, yellow_range]:
+                lower_color = np.array([color_range[0], min_s + 30, min_v + 20])  # Stricter thresholds
+                upper_color = np.array([color_range[1], 255, 255])
+                color_mask = cv2.inRange(hsv, lower_color, upper_color)
+                
+                # Additional validation for orange/yellow regions
+                contours = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+                validated_mask = np.zeros_like(color_mask)
+                
+                for cnt in contours:
+                    x, y, w, h = cv2.boundingRect(cnt)
+                    roi = enhanced_frame[y:y+h, x:x+w]
+                    roi_hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+                    roi_lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB)
+                    
+                    # Advanced color analysis
+                    sat_std = np.std(roi_hsv[:,:,1])
+                    val_std = np.std(roi_hsv[:,:,2])
+                    a_std = np.std(roi_lab[:,:,1])
+                    b_std = np.std(roi_lab[:,:,2])
+                    
+                    # Check for fire-like characteristics
+                    if (sat_std > 40 and val_std > 50 and  # High variation in saturation and value
+                        a_std > 10 and b_std > 10 and  # Significant color variation in LAB space
+                        w/h < 2 and h/w < 2):  # Reasonable aspect ratio
+                        cv2.drawContours(validated_mask, [cnt], -1, 255, -1)
             
-            # Combine all color masks
+            masks.append(validated_mask)
+            
+            # Combine masks and process
             combined_mask = np.zeros_like(masks[0])
             for mask in masks:
                 combined_mask = cv2.bitwise_or(combined_mask, mask)
             
-            # Apply morphological operations
-            kernel = np.ones((5, 5), np.uint8)
+            kernel = np.ones((5,5), np.uint8)
             combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
             combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
             
-            # Find and filter contours
             contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             min_contour_area = frame.shape[0] * frame.shape[1] * self.config["min_fire_size_ratio"]
             valid_contours = []
@@ -221,32 +376,14 @@ class FireDetectionSystem:
             for cnt in contours:
                 area = cv2.contourArea(cnt)
                 if area > min_contour_area:
-                    # Get the region of the contour
                     x, y, w, h = cv2.boundingRect(cnt)
-                    
-                    # Check aspect ratio
-                    aspect_ratio = max(w, h) / (min(w, h) + 1e-6)
-                    if aspect_ratio < min_aspect_ratio:
-                        continue
-                    
-                    # Check roundness
-                    perimeter = cv2.arcLength(cnt, True)
-                    roundness = 4 * np.pi * area / (perimeter * perimeter + 1e-6)
-                    if roundness > max_roundness:
-                        continue
-                    
-                    # Get ROI for further analysis
                     roi = frame[y:y+h, x:x+w]
                     roi_mask = combined_mask[y:y+h, x:x+w]
                     
-                    # Check if region has fire-like characteristics
                     if self.analyze_light_characteristics(frame, roi, roi_mask):
                         valid_contours.append(cnt)
             
-            # Convert valid contours to regions
             fire_regions = [cv2.boundingRect(cnt) for cnt in valid_contours]
-            
-            # Final decision
             is_fire = len(valid_contours) > 0
             
             return is_fire, combined_mask, fire_regions
@@ -311,29 +448,34 @@ class FireDetectionSystem:
             return False, None, 0
 
     def save_detection_data(self, frame, confidence, fire_regions):
+        """Save detection data including screenshot when fire is detected."""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            detection_dir = Path("fire_detections")
-            detection_dir.mkdir(exist_ok=True)
             
-            # Save annotated frame
-            annotated_frame = frame.copy()
+            # Save the screenshot with detection visualization
+            screenshot = frame.copy()
             for x, y, w, h in fire_regions:
-                cv2.rectangle(annotated_frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-                cv2.putText(annotated_frame, f"Fire: {confidence:.2f}", 
-                           (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                cv2.rectangle(screenshot, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                cv2.putText(screenshot, f"Fire: {confidence:.2f}", 
+                          (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
             
-            cv2.imwrite(str(detection_dir / f"fire_detection_{timestamp}.jpg"), annotated_frame)
+            # Create filename with timestamp
+            filename = os.path.join(self.screenshot_dir, f"fire_detection_{timestamp}.jpg")
+            cv2.imwrite(filename, screenshot)
             
-            # Save detection metadata
-            metadata = {
+            logging.info(f"Fire detection screenshot saved: {filename}")
+            
+            # Save additional detection data if needed
+            detection_data = {
                 "timestamp": timestamp,
-                "confidence": float(confidence),
-                "fire_regions": fire_regions,
-                "device": str(self.device)
+                "confidence": confidence,
+                "regions": fire_regions
             }
-            with open(detection_dir / f"detection_{timestamp}.json", 'w') as f:
-                json.dump(metadata, f, indent=4)
+            
+            # Save detection data to a JSON file
+            json_filename = os.path.join(self.screenshot_dir, f"detection_data_{timestamp}.json")
+            with open(json_filename, 'w') as f:
+                json.dump(detection_data, f, indent=4)
                 
         except Exception as e:
             logging.error(f"Error saving detection data: {e}")
@@ -365,15 +507,35 @@ class FireDetectionSystem:
 
     def process_frame(self, frame):
         try:
-            # Convert frame for model input
-            pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            input_tensor = self.data_transforms(pil_image).unsqueeze(0).to(self.device)
+            # Convert frame to RGB for model input
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
+            # Prepare image for model
+            transform = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            ])
+            
+            # Transform image
+            img_tensor = transform(rgb_frame).unsqueeze(0)
+            
+            # Extract texture features
+            texture_features = self.texture_extractor.extract_features(rgb_frame)
+            texture_tensor = torch.FloatTensor(texture_features).unsqueeze(0)
+            
+            # Move to device
+            device = next(self.model.parameters()).device
+            img_tensor = img_tensor.to(device)
+            texture_tensor = texture_tensor.to(device)
+            
+            # Get model prediction
             with torch.no_grad():
-                output = self.model(input_tensor)
+                output = self.model((img_tensor, texture_tensor))
                 probabilities = torch.softmax(output, dim=1)
-                confidence = probabilities[0][1].item()  # Probability of fire class
-            
+                confidence, prediction = torch.max(probabilities, 1)
+                
             # Multiple analysis methods
             color_detected, color_mask, fire_regions = self.analyze_color_patterns(frame)
             temporal_detected, _ = self.analyze_temporal_patterns()
@@ -384,7 +546,7 @@ class FireDetectionSystem:
             
             # Less strict combination of detection methods
             current_detection = (
-                confidence > self.config["min_confidence"] and 
+                confidence.item() > self.config["min_confidence"] and 
                 color_detected and 
                 (temporal_detected or motion_detected)
             )
@@ -412,24 +574,25 @@ class FireDetectionSystem:
             if self.continuous_detection:
                 self.fire_detected_count += 1
                 if self.fire_detected_count >= self.config["consecutive_detections_threshold"]:
-                    self.save_detection_data(frame, confidence * 100, fire_regions)
-                    self.send_alert(confidence * 100, fire_regions)
+                    self.save_detection_data(frame, confidence.item(), fire_regions)
+                    self.send_alert(confidence.item(), fire_regions)
             else:
                 self.fire_detected_count = max(0, self.fire_detected_count - 1)
             
-            return self.continuous_detection, confidence, color_mask if color_detected else None, fire_regions, current_detection
+            return self.continuous_detection, confidence.item(), color_mask if color_detected else None, fire_regions, current_detection
             
         except Exception as e:
             logging.error(f"Error processing frame: {e}")
             return False, 0.0, None, [], False
 
     def run_detection(self):
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            logging.error("Error: Could not open webcam.")
-            return
-
+        """Run the fire detection system on video input."""
         try:
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                logging.error("Error: Could not open webcam.")
+                return
+
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -444,7 +607,7 @@ class FireDetectionSystem:
                 # Add detection status visualization
                 status_text = "Detecting..." if current_detection else "No Fire"
                 if current_detection and not self.continuous_detection:
-                    constant_detection_seconds = self.config.get("constant_detection_seconds", 3)
+                    constant_detection_seconds = self.config.get("constant_detection_seconds", 1)
                     remaining_time = max(0, constant_detection_seconds - 
                                       (datetime.now() - self.first_detection_time).total_seconds())
                     status_text = f"Validating... {remaining_time:.1f}s"
