@@ -1,0 +1,145 @@
+2025-01-16 12:11:50,416 - INFO - Configuration loaded successfully
+2025-01-16 12:11:58,319 - ERROR - Error loading model: [Errno 2] No such file or directory: 'runs\\train\\fire_detection_yolov5\\weights\\best.pt'. Cache may be out of date, try `force_reload=True` or see https://docs.ultralytics.com/yolov5/tutorials/pytorch_hub_model_loading for help.
+2025-01-16 12:14:54,973 - INFO - Configuration loaded successfully
+2025-01-16 12:15:00,629 - ERROR - Error loading model: [Errno 2] No such file or directory: 'runs\\train\\fire_detection_yolov5\\weights\\best.pt'. Cache may be out of date, try `force_reload=True` or see https://docs.ultralytics.com/yolov5/tutorials/pytorch_hub_model_loading for help.
+2025-01-16 12:15:29,845 - INFO - Configuration loaded successfully
+2025-01-16 12:15:35,402 - INFO - Model loaded successfully
+2025-01-16 12:15:35,403 - INFO - Starting fire detection on video: Videos/test_video.mp4
+2025-01-16 12:15:35,568 - ERROR - Error processing video: Error opening video file: Videos/test_video.mp4
+2025-01-16 12:16:58,438 - INFO - Configuration loaded successfully
+2025-01-16 12:17:04,540 - INFO - Model loaded successfully
+2025-01-16 12:17:04,541 - ERROR - Error in main: EOF when reading a line
+2025-01-16 12:17:28,210 - INFO - Configuration loaded successfully
+2025-01-16 12:17:33,998 - INFO - Model loaded successfully
+2025-01-16 12:17:33,998 - INFO - Starting fire detection on video: 0
+2025-01-16 12:18:00,700 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:01,503 - INFO - Frame 1: Detected 1 fire instances with confidence 0.55
+2025-01-16 12:18:01,530 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:02,355 - INFO - Frame 2: Detected 1 fire instances with confidence 0.52
+2025-01-16 12:18:02,378 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:03,069 - INFO - Frame 3: Detected 1 fire instances with confidence 0.46
+2025-01-16 12:18:03,087 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:03,752 - INFO - Frame 4: Detected 1 fire instances with confidence 0.40
+2025-01-16 12:18:03,773 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:04,385 - INFO - Frame 5: Detected 1 fire instances with confidence 0.57
+2025-01-16 12:18:04,401 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:04,985 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:04,986 - INFO - Sending alert notification with confidence 0.39 and 1 detections
+2025-01-16 12:18:04,991 - INFO - Frame 6: Detected 1 fire instances with confidence 0.39
+2025-01-16 12:18:05,011 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:05,678 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:05,678 - INFO - Sending alert notification with confidence 0.54 and 1 detections
+2025-01-16 12:18:05,684 - INFO - Frame 7: Detected 1 fire instances with confidence 0.54
+2025-01-16 12:18:05,704 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:06,351 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:06,351 - INFO - Sending alert notification with confidence 0.58 and 1 detections
+2025-01-16 12:18:06,354 - INFO - Frame 8: Detected 1 fire instances with confidence 0.58
+2025-01-16 12:18:06,376 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:07,089 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:07,090 - INFO - Sending alert notification with confidence 0.49 and 1 detections
+2025-01-16 12:18:07,098 - INFO - Frame 9: Detected 1 fire instances with confidence 0.49
+2025-01-16 12:18:07,118 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:07,818 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:07,818 - INFO - Sending alert notification with confidence 0.48 and 1 detections
+2025-01-16 12:18:07,830 - INFO - Frame 10: Detected 1 fire instances with confidence 0.48
+2025-01-16 12:18:07,851 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:08,519 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:08,519 - INFO - Sending alert notification with confidence 0.63 and 1 detections
+2025-01-16 12:18:08,522 - INFO - Frame 11: Detected 1 fire instances with confidence 0.63
+2025-01-16 12:18:08,550 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:09,374 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:09,374 - INFO - Sending alert notification with confidence 0.52 and 1 detections
+2025-01-16 12:18:09,391 - INFO - Frame 12: Detected 1 fire instances with confidence 0.52
+2025-01-16 12:18:09,407 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:10,154 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:10,154 - INFO - Sending alert notification with confidence 0.49 and 1 detections
+2025-01-16 12:18:10,171 - INFO - Frame 13: Detected 1 fire instances with confidence 0.49
+2025-01-16 12:18:10,196 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:10,856 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:10,856 - INFO - Sending alert notification with confidence 0.44 and 1 detections
+2025-01-16 12:18:10,872 - INFO - Frame 14: Detected 1 fire instances with confidence 0.44
+2025-01-16 12:18:10,893 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:11,643 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:11,643 - INFO - Sending alert notification with confidence 0.41 and 2 detections
+2025-01-16 12:18:11,646 - INFO - Frame 15: Detected 2 fire instances with confidence 0.41
+2025-01-16 12:18:11,665 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:12,372 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:12,372 - INFO - Sending alert notification with confidence 0.48 and 1 detections
+2025-01-16 12:18:12,376 - INFO - Frame 16: Detected 1 fire instances with confidence 0.48
+2025-01-16 12:18:12,393 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:13,029 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:13,029 - INFO - Sending alert notification with confidence 0.43 and 1 detections
+2025-01-16 12:18:13,044 - INFO - Frame 17: Detected 1 fire instances with confidence 0.43
+2025-01-16 12:18:13,062 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:13,353 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:13,882 - INFO - Frame 19: Detected 1 fire instances with confidence 0.31
+2025-01-16 12:18:13,901 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:15,296 - INFO - Frame 20: Detected 2 fire instances with confidence 0.31
+2025-01-16 12:18:15,316 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:15,915 - INFO - Frame 21: Detected 1 fire instances with confidence 0.31
+2025-01-16 12:18:15,936 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:16,470 - INFO - Frame 22: Detected 1 fire instances with confidence 0.36
+2025-01-16 12:18:16,487 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:17,123 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:17,123 - INFO - Sending alert notification with confidence 0.40 and 1 detections
+2025-01-16 12:18:17,138 - INFO - Frame 23: Detected 1 fire instances with confidence 0.40
+2025-01-16 12:18:17,156 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:18,036 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:18,037 - INFO - Sending alert notification with confidence 0.29 and 2 detections
+2025-01-16 12:18:18,052 - INFO - Frame 24: Detected 2 fire instances with confidence 0.29
+2025-01-16 12:18:18,071 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:18,962 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:18,962 - INFO - Sending alert notification with confidence 0.37 and 2 detections
+2025-01-16 12:18:18,965 - INFO - Frame 25: Detected 2 fire instances with confidence 0.37
+2025-01-16 12:18:18,980 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:19,769 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:19,769 - INFO - Sending alert notification with confidence 0.32 and 2 detections
+2025-01-16 12:18:19,779 - INFO - Frame 26: Detected 2 fire instances with confidence 0.32
+2025-01-16 12:18:19,799 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:20,357 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:20,357 - INFO - Sending alert notification with confidence 0.27 and 1 detections
+2025-01-16 12:18:20,369 - INFO - Frame 27: Detected 1 fire instances with confidence 0.27
+2025-01-16 12:18:20,387 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:21,096 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:21,096 - INFO - Sending alert notification with confidence 0.41 and 1 detections
+2025-01-16 12:18:21,112 - INFO - Frame 28: Detected 1 fire instances with confidence 0.41
+2025-01-16 12:18:21,134 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:21,762 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:21,762 - INFO - Sending alert notification with confidence 0.30 and 1 detections
+2025-01-16 12:18:21,779 - INFO - Frame 29: Detected 1 fire instances with confidence 0.30
+2025-01-16 12:18:21,794 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+
+2025-01-16 12:18:22,422 - ERROR - Error saving detection data: Object of type float32 is not JSON serializable
+2025-01-16 12:18:22,423 - INFO - Sending alert notification with confidence 0.33 and 1 detections
+2025-01-16 12:18:22,434 - INFO - Frame 30: Detected 1 fire instances with confidence 0.33
+2025-01-16 12:18:22,451 - ERROR - Error enhancing frame: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\merge.dispatch.cpp:130: error: (-215:Assertion failed) mv[i].size == mv[0].size && mv[i].depth() == depth in function 'cv::merge'
+

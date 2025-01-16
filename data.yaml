@@ -1,0 +1,8 @@
+path: c:/Users/Admin/Desktop/Fire Detection From a Video/Datasets/yolo_dataset  # dataset root dir
+train: train/images  # train images
+val: valid/images    # validation images
+test: test/images    # test images (optional)
+
+# Classes
+nc: 1  # number of classes
+names: ['fire']  # class names
