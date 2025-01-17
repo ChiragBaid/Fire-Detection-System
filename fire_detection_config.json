@@ -1,0 +1,8 @@
+{
+    "min_confidence": 0.85,
+    "frame_buffer_size": 10,
+    "alert_cooldown_minutes": 5,
+    "min_fire_size_ratio": 0.005,
+    "motion_threshold": 0.98,
+    "consecutive_detections_threshold": 3
+}
